@@ -2,6 +2,43 @@
 
 Notable changes to Mailpit will be documented in this file.
 
+## [v1.24.2]
+
+### Feature
+- Display unread count in app badge ([#485](https://github.com/axllent/mailpit/issues/485))
+
+### Chore
+- Update caniemail database
+- Update node dependencies
+- Update Go dependencies
+- Install script improvements & better error handling ([#482](https://github.com/axllent/mailpit/issues/482))
+
+
+## [v1.24.1]
+
+### Feature
+- Add ability to mark all search results as read ([#476](https://github.com/axllent/mailpit/issues/476))
+
+### Chore
+- Update node dependencies
+- Update Go dependencies
+- Improve error message for From header parsing failure ([#477](https://github.com/axllent/mailpit/issues/477))
+- Bump node version to 22 for binary releases
+
+
+## [v1.24.0]
+
+### Feature
+- Add TLS forwarding support and refactor forwarding function
+- Add TLS relay support and refactor relay function ([#471](https://github.com/axllent/mailpit/issues/471))
+
+### Chore
+- Update node dependencies
+- Update Go dependencies
+- Standardize error message casing
+- Update Go dependencies
+
+
 ## [v1.23.2]
 
 ### Chore

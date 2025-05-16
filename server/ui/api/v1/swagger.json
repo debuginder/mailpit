@@ -548,7 +548,7 @@
         }
       },
       "put": {
-        "description": "If no IDs are provided then all messages are updated.",
+        "description": "You can optionally provide an array of IDs or a search string.\nIf neither IDs nor search is provided then all mailbox messages are updated.",
         "consumes": [
           "application/json"
         ],
@@ -572,8 +572,9 @@
               "type": "object",
               "properties": {
                 "IDs": {
-                  "description": "Array of message database IDs",
+                  "description": "Optional array of message database IDs",
                   "type": "array",
+                  "default": [],
                   "items": {
                     "type": "string"
                   },
@@ -587,9 +588,21 @@
                   "type": "boolean",
                   "default": false,
                   "example": true
+                },
+                "Search": {
+                  "description": "Optional messages matching a search",
+                  "type": "string",
+                  "example": "tag:backups"
                 }
               }
             }
+          },
+          {
+            "type": "string",
+            "x-go-name": "TZ",
+            "description": "Optional [timezone identifier](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) used only for `before:` \u0026 `after:` searches (eg: \"Pacific/Auckland\").",
+            "name": "tz",
+            "in": "query"
           }
         ],
         "responses": {
@@ -677,6 +690,7 @@
           },
           {
             "type": "string",
+            "default": "0",
             "x-go-name": "Start",
             "description": "Pagination offset",
             "name": "start",
@@ -684,6 +698,7 @@
           },
           {
             "type": "string",
+            "default": "50",
             "x-go-name": "Limit",
             "description": "Limit results",
             "name": "limit",
@@ -692,7 +707,7 @@
           {
             "type": "string",
             "x-go-name": "TZ",
-            "description": "[Timezone identifier](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) used only for `before:` \u0026 `after:` searches (eg: \"Pacific/Auckland\").",
+            "description": "Optional [timezone identifier](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) used only for `before:` \u0026 `after:` searches (eg: \"Pacific/Auckland\").",
             "name": "tz",
             "in": "query"
           }
@@ -1421,6 +1436,32 @@
       "x-go-name": "Response",
       "x-go-package": "github.com/axllent/mailpit/internal/linkcheck"
     },
+    "ListUnsubscribe": {
+      "description": "ListUnsubscribe contains a summary of List-Unsubscribe \u0026 List-Unsubscribe-Post headers\nincluding validation of the link structure",
+      "type": "object",
+      "properties": {
+        "Errors": {
+          "description": "Validation errors (if any)",
+          "type": "string"
+        },
+        "Header": {
+          "description": "List-Unsubscribe header value",
+          "type": "string"
+        },
+        "HeaderPost": {
+          "description": "List-Unsubscribe-Post value (if set)",
+          "type": "string"
+        },
+        "Links": {
+          "description": "Detected links, maximum one email and one HTTP(S) link",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "x-go-package": "github.com/axllent/mailpit/internal/storage"
+    },
     "Message": {
       "description": "Message data excluding physical attachments",
       "type": "object",
@@ -1468,6 +1509,9 @@
           "items": {
             "$ref": "#/definitions/Attachment"
           }
+        },
+        "ListUnsubscribe": {
+          "$ref": "#/definitions/ListUnsubscribe"
         },
         "MessageID": {
           "description": "Message ID",
@@ -1623,6 +1667,12 @@
           "type": "number",
           "format": "double",
           "x-go-name": "MessagesCount"
+        },
+        "messages_unread": {
+          "description": "Total number of unread messages matching current query",
+          "type": "number",
+          "format": "double",
+          "x-go-name": "MessagesUnreadCount"
         },
         "start": {
           "description": "Pagination offset",
