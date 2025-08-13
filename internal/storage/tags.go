@@ -138,17 +138,6 @@ func deleteMessageTag(id, name string) error {
 	return pruneUnusedTags()
 }
 
-// DeleteAllMessageTags deleted all tags from a message
-func DeleteAllMessageTags(id string) error {
-	if _, err := sqlf.DeleteFrom(tenant("message_tags")).
-		Where(tenant("message_tags.ID")+" = ?", id).
-		ExecAndClose(context.TODO(), db); err != nil {
-		return err
-	}
-
-	return pruneUnusedTags()
-}
-
 // GetAllTags returns all used tags
 func GetAllTags() []string {
 	var tags = []string{}
@@ -171,7 +160,7 @@ func GetAllTags() []string {
 func GetAllTagsCount() map[string]int64 {
 	var tags = make(map[string]int64)
 	var name string
-	var total int64
+	var total float64 // use float64 for rqlite compatibility
 
 	if err := sqlf.
 		Select(`Name`).To(&name).
@@ -181,7 +170,7 @@ func GetAllTagsCount() map[string]int64 {
 		GroupBy(tenant("message_tags.TagID")).
 		OrderBy("Name").
 		QueryAndClose(context.TODO(), db, func(row *sql.Rows) {
-			tags[name] = total
+			tags[name] = int64(total)
 		}); err != nil {
 		logger.Log().Errorf("[db] %s", err.Error())
 	}
@@ -323,7 +312,7 @@ func findTagsInRawMessage(message *[]byte) []string {
 }
 
 // Returns tags found in email plus addresses (eg: test+tagname@example.com)
-func (d DBMailSummary) tagsFromPlusAddresses() []string {
+func (d Metadata) tagsFromPlusAddresses() []string {
 	tags := []string{}
 	for _, c := range d.To {
 		matches := addressPlusRe.FindAllStringSubmatch(c.Address, 1)

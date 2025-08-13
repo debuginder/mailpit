@@ -28,12 +28,12 @@ var (
 )
 
 // MailHandler handles the incoming message to store in the database
-func mailHandler(origin net.Addr, from string, to []string, data []byte) (string, error) {
-	return SaveToDatabase(origin, from, to, data)
+func mailHandler(origin net.Addr, from string, to []string, data []byte, smtpUser *string) (string, error) {
+	return SaveToDatabase(origin, from, to, data, smtpUser)
 }
 
 // SaveToDatabase will attempt to save a message to the database
-func SaveToDatabase(origin net.Addr, from string, to []string, data []byte) (string, error) {
+func SaveToDatabase(origin net.Addr, from string, to []string, data []byte, smtpUser *string) (string, error) {
 	if !config.SMTPStrictRFCHeaders && bytes.Contains(data, []byte("\r\r\n")) {
 		// replace all <CR><CR><LF> (\r\r\n) with <CR><LF> (\r\n)
 		// @see https://github.com/axllent/mailpit/issues/87 & https://github.com/axllent/mailpit/issues/153
@@ -110,7 +110,7 @@ func SaveToDatabase(origin net.Addr, from string, to []string, data []byte) (str
 		logger.Log().Debugf("[smtpd] added missing addresses to Bcc header: %s", strings.Join(missingAddresses, ", "))
 	}
 
-	id, err := storage.Store(&data)
+	id, err := storage.Store(&data, smtpUser)
 	if err != nil {
 		logger.Log().Errorf("[db] error storing message: %s", err.Error())
 		return "", err
@@ -194,15 +194,16 @@ func listenAndServe(addr string, handler MsgIDHandler, authHandler AuthHandler) 
 
 	Debug = true // to enable Mailpit logging
 	srv := &Server{
-		Addr:              addr,
-		MsgIDHandler:      handler,
-		HandlerRcpt:       handlerRcpt,
-		AppName:           "Mailpit",
-		Hostname:          "",
-		AuthHandler:       nil,
-		AuthRequired:      false,
-		MaxRecipients:     config.SMTPMaxRecipients,
-		DisableReverseDNS: DisableReverseDNS,
+		Addr:                     addr,
+		MsgIDHandler:             handler,
+		HandlerRcpt:              handlerRcpt,
+		AppName:                  "Mailpit",
+		Hostname:                 "",
+		AuthHandler:              nil,
+		AuthRequired:             false,
+		MaxRecipients:            config.SMTPMaxRecipients,
+		IgnoreRejectedRecipients: config.SMTPIgnoreRejectedRecipients,
+		DisableReverseDNS:        DisableReverseDNS,
 		LogRead: func(remoteIP, verb, line string) {
 			logger.Log().Debugf("[smtpd] %s (%s) %s", verbLogTranslator(verb), remoteIP, line)
 		},

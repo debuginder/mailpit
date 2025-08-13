@@ -9,6 +9,7 @@ import (
 	"github.com/axllent/mailpit/config"
 	"github.com/axllent/mailpit/internal/auth"
 	"github.com/axllent/mailpit/internal/logger"
+	"github.com/axllent/mailpit/internal/prometheus"
 	"github.com/axllent/mailpit/internal/smtpd"
 	"github.com/axllent/mailpit/internal/smtpd/chaos"
 	"github.com/axllent/mailpit/internal/storage"
@@ -39,6 +40,14 @@ Documentation:
 			os.Exit(1)
 		}
 
+		// Start Prometheus metrics if enabled
+		switch prometheus.GetMode() {
+		case "integrated":
+			prometheus.StartUpdater()
+		case "separate":
+			go prometheus.StartSeparateServer()
+		}
+
 		go server.Listen()
 
 		if err := smtpd.Listen(); err != nil {
@@ -56,14 +65,6 @@ func Execute() {
 	if err != nil {
 		os.Exit(1)
 	}
-}
-
-// SendmailExecute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
-func SendmailExecute() {
-	args := []string{"mailpit", "sendmail"}
-
-	rootCmd.Run(sendmailCmd, args)
 }
 
 func init() {
@@ -84,6 +85,7 @@ func init() {
 
 	rootCmd.Flags().StringVarP(&config.Database, "database", "d", config.Database, "Database to store persistent data")
 	rootCmd.Flags().BoolVar(&config.DisableWAL, "disable-wal", config.DisableWAL, "Disable WAL for local database (allows NFS mounted DBs)")
+	rootCmd.Flags().BoolVar(&config.DisableVersionCheck, "disable-version-check", config.DisableVersionCheck, "Disable version update checking")
 	rootCmd.Flags().IntVar(&config.Compression, "compression", config.Compression, "Compression level to store raw messages (0-3)")
 	rootCmd.Flags().StringVar(&config.Label, "label", config.Label, "Optional label identify this Mailpit instance")
 	rootCmd.Flags().StringVar(&config.TenantID, "tenant-id", config.TenantID, "Database tenant ID to isolate data")
@@ -106,6 +108,11 @@ func init() {
 	rootCmd.Flags().StringVar(&config.EnableSpamAssassin, "enable-spamassassin", config.EnableSpamAssassin, "Enable integration with SpamAssassin")
 	rootCmd.Flags().BoolVar(&config.AllowUntrustedTLS, "allow-untrusted-tls", config.AllowUntrustedTLS, "Do not verify HTTPS certificates (link checker & screenshots)")
 	rootCmd.Flags().BoolVar(&config.DisableHTTPCompression, "disable-http-compression", config.DisableHTTPCompression, "Disable HTTP compression support (web UI & API)")
+	rootCmd.Flags().BoolVar(&config.HideDeleteAllButton, "hide-delete-all-button", config.HideDeleteAllButton, "Hide the \"Delete all\" button in the web UI")
+
+	// Send API
+	rootCmd.Flags().StringVar(&config.SendAPIAuthFile, "send-api-auth-file", config.SendAPIAuthFile, "A password file for Send API authentication")
+	rootCmd.Flags().BoolVar(&config.SendAPIAuthAcceptAny, "send-api-auth-accept-any", config.SendAPIAuthAcceptAny, "Accept any username and password for the Send API endpoint, including none")
 
 	// SMTP server
 	rootCmd.Flags().StringVarP(&config.SMTPListen, "smtp", "s", config.SMTPListen, "SMTP bind interface and port")
@@ -119,6 +126,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.SMTPStrictRFCHeaders, "smtp-strict-rfc-headers", config.SMTPStrictRFCHeaders, "Return SMTP error if message headers contain <CR><CR><LF>")
 	rootCmd.Flags().IntVar(&config.SMTPMaxRecipients, "smtp-max-recipients", config.SMTPMaxRecipients, "Maximum SMTP recipients allowed")
 	rootCmd.Flags().StringVar(&config.SMTPAllowedRecipients, "smtp-allowed-recipients", config.SMTPAllowedRecipients, "Only allow SMTP recipients matching a regular expression (default allow all)")
+	rootCmd.Flags().BoolVar(&config.SMTPIgnoreRejectedRecipients, "smtp-ignore-rejected-recipients", config.SMTPIgnoreRejectedRecipients, "Ignore rejected SMTP recipients with 2xx response")
 	rootCmd.Flags().BoolVar(&smtpd.DisableReverseDNS, "smtp-disable-rdns", smtpd.DisableReverseDNS, "Disable SMTP reverse DNS lookups")
 
 	// SMTP relay
@@ -144,6 +152,10 @@ func init() {
 	rootCmd.Flags().StringVar(&config.TagsConfig, "tags-config", config.TagsConfig, "Load tags filters from yaml configuration file")
 	rootCmd.Flags().BoolVar(&tools.TagsTitleCase, "tags-title-case", tools.TagsTitleCase, "TitleCase new tags generated from plus-addresses and X-Tags")
 	rootCmd.Flags().StringVar(&config.TagsDisable, "tags-disable", config.TagsDisable, "Disable auto-tagging, comma separated (eg: plus-addresses,x-tags)")
+	rootCmd.Flags().BoolVar(&config.TagsUsername, "tags-username", config.TagsUsername, "Auto-tag messages with the authenticated username")
+
+	// Prometheus metrics
+	rootCmd.Flags().StringVar(&config.PrometheusListen, "enable-prometheus", config.PrometheusListen, "Enable Prometheus metrics: true|false|<ip:port> (eg:'0.0.0.0:9090')")
 
 	// Webhook
 	rootCmd.Flags().StringVar(&config.WebhookURL, "webhook-url", config.WebhookURL, "Send a webhook request for new messages")
@@ -185,6 +197,8 @@ func initConfigFromEnv() {
 	}
 
 	config.DisableWAL = getEnabledFromEnv("MP_DISABLE_WAL")
+
+	config.DisableVersionCheck = getEnabledFromEnv("MP_DISABLE_VERSION_CHECK")
 
 	if len(os.Getenv("MP_COMPRESSION")) > 0 {
 		config.Compression, _ = strconv.Atoi(os.Getenv("MP_COMPRESSION"))
@@ -244,6 +258,18 @@ func initConfigFromEnv() {
 	if getEnabledFromEnv("MP_DISABLE_HTTP_COMPRESSION") {
 		config.DisableHTTPCompression = true
 	}
+	if getEnabledFromEnv("MP_HIDE_DELETE_ALL_BUTTON") {
+		config.HideDeleteAllButton = true
+	}
+
+	// Send API
+	config.SendAPIAuthFile = os.Getenv("MP_SEND_API_AUTH_FILE")
+	if err := auth.SetSendAPIAuth(os.Getenv("MP_SEND_API_AUTH")); err != nil {
+		logger.Log().Error(err.Error())
+	}
+	if getEnabledFromEnv("MP_SEND_API_AUTH_ACCEPT_ANY") {
+		config.SendAPIAuthAcceptAny = true
+	}
 
 	// SMTP server
 	if len(os.Getenv("MP_SMTP_BIND_ADDR")) > 0 {
@@ -276,6 +302,9 @@ func initConfigFromEnv() {
 	if len(os.Getenv("MP_SMTP_ALLOWED_RECIPIENTS")) > 0 {
 		config.SMTPAllowedRecipients = os.Getenv("MP_SMTP_ALLOWED_RECIPIENTS")
 	}
+	if getEnabledFromEnv("MP_SMTP_IGNORE_REJECTED_RECIPIENTS") {
+		config.SMTPIgnoreRejectedRecipients = true
+	}
 	if getEnabledFromEnv("MP_SMTP_DISABLE_RDNS") {
 		smtpd.DisableReverseDNS = true
 	}
@@ -302,6 +331,7 @@ func initConfigFromEnv() {
 	config.SMTPRelayConfig.OverrideFrom = os.Getenv("MP_SMTP_RELAY_OVERRIDE_FROM")
 	config.SMTPRelayConfig.AllowedRecipients = os.Getenv("MP_SMTP_RELAY_ALLOWED_RECIPIENTS")
 	config.SMTPRelayConfig.BlockedRecipients = os.Getenv("MP_SMTP_RELAY_BLOCKED_RECIPIENTS")
+	config.SMTPRelayConfig.PreserveMessageIDs = getEnabledFromEnv("MP_SMTP_RELAY_PRESERVE_MESSAGE_IDS")
 
 	// SMTP forwarding
 	config.SMTPForwardConfigFile = os.Getenv("MP_SMTP_FORWARD_CONFIG")
@@ -341,6 +371,12 @@ func initConfigFromEnv() {
 	config.TagsConfig = os.Getenv("MP_TAGS_CONFIG")
 	tools.TagsTitleCase = getEnabledFromEnv("MP_TAGS_TITLE_CASE")
 	config.TagsDisable = os.Getenv("MP_TAGS_DISABLE")
+	config.TagsUsername = getEnabledFromEnv("MP_TAGS_USERNAME")
+
+	// Prometheus metrics
+	if len(os.Getenv("MP_ENABLE_PROMETHEUS")) > 0 {
+		config.PrometheusListen = os.Getenv("MP_ENABLE_PROMETHEUS")
+	}
 
 	// Webhook
 	if len(os.Getenv("MP_WEBHOOK_URL")) > 0 {
@@ -358,9 +394,9 @@ func initConfigFromEnv() {
 func initDeprecatedConfigFromEnv() {
 	// deprecated 2024/04/12 - but will not be removed to maintain backwards compatibility
 	if len(os.Getenv("MP_DATA_FILE")) > 0 {
+		logger.Log().Warn("ENV MP_DATA_FILE has been deprecated, use MP_DATABASE")
 		config.Database = os.Getenv("MP_DATA_FILE")
 	}
-
 	// deprecated 2023/03/12
 	if len(os.Getenv("MP_UI_SSL_CERT")) > 0 {
 		logger.Log().Warn("ENV MP_UI_SSL_CERT has been deprecated, use MP_UI_TLS_CERT")

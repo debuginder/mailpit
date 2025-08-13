@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/axllent/mailpit/config"
+	"github.com/leporo/sqlf"
 )
 
 func TestTags(t *testing.T) {
@@ -24,7 +26,7 @@ func TestTags(t *testing.T) {
 		ids := []string{}
 
 		for i := 0; i < 10; i++ {
-			id, err := Store(&testMimeEmail)
+			id, err := Store(&testMimeEmail, nil)
 			if err != nil {
 				t.Log("error ", err)
 				t.Fail()
@@ -57,7 +59,7 @@ func TestTags(t *testing.T) {
 		}
 
 		// test 20 tags
-		id, err := Store(&testMimeEmail)
+		id, err := Store(&testMimeEmail, nil)
 		if err != nil {
 			t.Log("error ", err)
 			t.Fail()
@@ -83,7 +85,7 @@ func TestTags(t *testing.T) {
 		assertEqual(t, strings.Join(newTags[1:], "|"), strings.Join(returnedTags, "|"), "Message tags do not match after deleting 1")
 
 		// remove all tags
-		if err := DeleteAllMessageTags(id); err != nil {
+		if err := deleteAllMessageTags(id); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
@@ -97,7 +99,7 @@ func TestTags(t *testing.T) {
 		}
 		returnedTags = getMessageTags(id)
 		assertEqual(t, "Duplicate Tag", strings.Join(returnedTags, "|"), "Message tags should be duplicated")
-		if err := DeleteAllMessageTags(id); err != nil {
+		if err := deleteAllMessageTags(id); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
@@ -109,7 +111,7 @@ func TestTags(t *testing.T) {
 		}
 		returnedTags = getMessageTags(id)
 		assertEqual(t, "Dirty Tag", strings.Join(returnedTags, "|"), "Dirty message tag did not clean as expected")
-		if err := DeleteAllMessageTags(id); err != nil {
+		if err := deleteAllMessageTags(id); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
@@ -124,7 +126,7 @@ func TestTags(t *testing.T) {
 		}
 
 		// test 20 tags
-		id, err = Store(&testTagEmail)
+		id, err = Store(&testTagEmail, nil)
 		if err != nil {
 			t.Log("error ", err)
 			t.Fail()
@@ -132,7 +134,7 @@ func TestTags(t *testing.T) {
 
 		returnedTags = getMessageTags(id)
 		assertEqual(t, "BccTag|CcTag|FromFag|ToTag|X-tag1|X-tag2", strings.Join(returnedTags, "|"), "Tags not detected correctly")
-		if err := DeleteAllMessageTags(id); err != nil {
+		if err := deleteAllMessageTags(id); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
@@ -140,4 +142,60 @@ func TestTags(t *testing.T) {
 		Close()
 	}
 
+}
+func TestUsernameAutoTagging(t *testing.T) {
+	setup("")
+	defer Close()
+
+	username := "testuser"
+
+	t.Run("Auto-tagging enabled", func(t *testing.T) {
+		config.TagsUsername = true
+		id, err := Store(&testTextEmail, &username)
+		if err != nil {
+			t.Fatalf("Store failed: %v", err)
+		}
+		msg, err := GetMessage(id)
+		if err != nil {
+			t.Fatalf("GetMessage failed: %v", err)
+		}
+		found := false
+		for _, tag := range msg.Tags {
+			if tag == username {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected username '%s' in tags, got %v", username, msg.Tags)
+		}
+	})
+
+	t.Run("Auto-tagging disabled", func(t *testing.T) {
+		config.TagsUsername = false
+		id, err := Store(&testTextEmail, &username)
+		if err != nil {
+			t.Fatalf("Store failed: %v", err)
+		}
+		msg, err := GetMessage(id)
+		if err != nil {
+			t.Fatalf("GetMessage failed: %v", err)
+		}
+		for _, tag := range msg.Tags {
+			if tag == username {
+				t.Errorf("Did not expect username '%s' in tags when disabled, got %v", username, msg.Tags)
+			}
+		}
+	})
+}
+
+// DeleteAllMessageTags deleted all tags from a message
+func deleteAllMessageTags(id string) error {
+	if _, err := sqlf.DeleteFrom(tenant("message_tags")).
+		Where(tenant("message_tags.ID")+" = ?", id).
+		ExecAndClose(context.TODO(), db); err != nil {
+		return err
+	}
+
+	return pruneUnusedTags()
 }

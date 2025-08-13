@@ -9,14 +9,15 @@ import (
 
 	"github.com/axllent/mailpit/internal/html2text"
 	"github.com/axllent/mailpit/internal/logger"
-	"github.com/jhillyerd/enmime"
+	"github.com/axllent/mailpit/internal/tools"
+	"github.com/jhillyerd/enmime/v2"
 )
 
 var (
 	// for stats to prevent import cycle
 	mu sync.RWMutex
 	// StatsDeleted for counting the number of messages deleted
-	StatsDeleted float64
+	StatsDeleted uint64
 )
 
 // AddTempFile adds a file to the slice of files to delete on exit
@@ -88,7 +89,7 @@ func cleanString(str string) string {
 // LogMessagesDeleted logs the number of messages deleted
 func logMessagesDeleted(n int) {
 	mu.Lock()
-	StatsDeleted = StatsDeleted + float64(n)
+	StatsDeleted = StatsDeleted + tools.SafeUint64(n)
 	mu.Unlock()
 }
 

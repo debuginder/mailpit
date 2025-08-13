@@ -7,23 +7,36 @@ import (
 	"time"
 
 	"github.com/axllent/mailpit/config"
+	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/storage"
-	"github.com/axllent/mailpit/internal/updater"
+	"github.com/axllent/mailpit/internal/tools"
 )
 
+// Stores cached version  along with its expiry time and error count.
+// Used to minimize repeated version lookups and track consecutive errors.
+type versionCache struct {
+	// github version string
+	value string
+	// time to expire the cache
+	expiry time.Time
+	// count of consecutive errors
+	errCount int
+}
+
 var (
-	// to prevent hammering Github for latest version
-	latestVersionCache string
+	// Version cache storing the latest GitHub version
+	vCache versionCache
 
 	// StartedAt is set to the current ime when Mailpit starts
 	startedAt time.Time
 
+	// sync mutex to prevent race condition with simultaneous requests
 	mu sync.RWMutex
 
-	smtpAccepted     float64
-	smtpAcceptedSize float64
-	smtpRejected     float64
-	smtpIgnored      float64
+	smtpAccepted     uint64
+	smtpAcceptedSize uint64
+	smtpRejected     uint64
+	smtpIgnored      uint64
 )
 
 // AppInformation struct
@@ -36,34 +49,40 @@ type AppInformation struct {
 	// Database path
 	Database string
 	// Database size in bytes
-	DatabaseSize float64
+	DatabaseSize uint64
 	// Total number of messages in the database
-	Messages float64
+	Messages uint64
 	// Total number of messages in the database
-	Unread float64
+	Unread uint64
 	// Tags and message totals per tag
 	Tags map[string]int64
 	// Runtime statistics
 	RuntimeStats struct {
 		// Mailpit server uptime in seconds
-		Uptime float64
+		Uptime uint64
 		// Current memory usage in bytes
 		Memory uint64
 		// Database runtime messages deleted
-		MessagesDeleted float64
+		MessagesDeleted uint64
 		// Accepted runtime SMTP messages
-		SMTPAccepted float64
+		SMTPAccepted uint64
 		// Total runtime accepted messages size in bytes
-		SMTPAcceptedSize float64
+		SMTPAcceptedSize uint64
 		// Rejected runtime SMTP messages
-		SMTPRejected float64
+		SMTPRejected uint64
 		// Ignored runtime SMTP messages (when using --ignore-duplicate-ids)
-		SMTPIgnored float64
+		SMTPIgnored uint64
 	}
 }
 
+// Calculates exponential backoff duration based on the error count.
+func getBackoff(errCount int) time.Duration {
+	backoff := min(time.Duration(1<<errCount)*time.Minute, 30*time.Minute)
+	return backoff
+}
+
 // Load the current statistics
-func Load() AppInformation {
+func Load(detectLatestVersion bool) AppInformation {
 	info := AppInformation{}
 	info.Version = config.Version
 
@@ -71,26 +90,42 @@ func Load() AppInformation {
 	runtime.ReadMemStats(&m)
 
 	info.RuntimeStats.Memory = m.Sys - m.HeapReleased
-	info.RuntimeStats.Uptime = time.Since(startedAt).Seconds()
+	info.RuntimeStats.Uptime = uint64(time.Since(startedAt).Seconds())
 	info.RuntimeStats.MessagesDeleted = storage.StatsDeleted
 	info.RuntimeStats.SMTPAccepted = smtpAccepted
 	info.RuntimeStats.SMTPAcceptedSize = smtpAcceptedSize
 	info.RuntimeStats.SMTPRejected = smtpRejected
 	info.RuntimeStats.SMTPIgnored = smtpIgnored
 
-	if latestVersionCache != "" {
-		info.LatestVersion = latestVersionCache
-	} else {
-		latest, _, _, err := updater.GithubLatest(config.Repo, config.RepoBinaryName)
-		if err == nil {
-			info.LatestVersion = latest
-			latestVersionCache = latest
+	if config.DisableVersionCheck {
+		info.LatestVersion = "disabled"
+	} else if detectLatestVersion {
+		mu.RLock()
+		cacheValid := time.Now().Before(vCache.expiry)
+		cacheValue := vCache.value
+		mu.RUnlock()
 
-			// clear latest version cache after 5 minutes
-			go func() {
-				time.Sleep(5 * time.Minute)
-				latestVersionCache = ""
-			}()
+		if cacheValid {
+			info.LatestVersion = cacheValue
+		} else {
+			mu.Lock()
+			// Re-check after acquiring write lock in case another goroutine refreshed it
+			if time.Now().Before(vCache.expiry) {
+				info.LatestVersion = vCache.value
+			} else {
+				latest, err := config.GHRUConfig.Latest()
+				if err == nil {
+					vCache = versionCache{value: latest.Tag, expiry: time.Now().Add(15 * time.Minute)}
+					info.LatestVersion = latest.Tag
+				} else {
+					logger.Log().Errorf("Failed to fetch latest version: %v", err)
+					vCache.errCount++
+					vCache.value = ""
+					vCache.expiry = time.Now().Add(getBackoff(vCache.errCount))
+					info.LatestVersion = ""
+				}
+			}
+			mu.Unlock()
 		}
 	}
 
@@ -112,7 +147,7 @@ func Track() {
 func LogSMTPAccepted(size int) {
 	mu.Lock()
 	smtpAccepted = smtpAccepted + 1
-	smtpAcceptedSize = smtpAcceptedSize + float64(size)
+	smtpAcceptedSize = smtpAcceptedSize + tools.SafeUint64(size)
 	mu.Unlock()
 }
 

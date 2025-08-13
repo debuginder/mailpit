@@ -11,7 +11,7 @@ import (
 
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/tools"
-	"github.com/jhillyerd/enmime"
+	"github.com/jhillyerd/enmime/v2"
 	"github.com/leporo/sqlf"
 )
 
@@ -73,23 +73,22 @@ func ReindexAll() {
 				continue
 			}
 
-			from := &mail.Address{}
+			meta, _ := GetMetadata(id)
+
 			fromJSON := addressToSlice(env, "From")
 			if len(fromJSON) > 0 {
-				from = fromJSON[0]
+				meta.From = fromJSON[0]
 			} else if env.GetHeader("From") != "" {
-				from = &mail.Address{Name: env.GetHeader("From")}
+				meta.From = &mail.Address{Name: env.GetHeader("From")}
+			} else {
+				meta.From = nil
 			}
+			meta.To = addressToSlice(env, "To")
+			meta.Cc = addressToSlice(env, "Cc")
+			meta.Bcc = addressToSlice(env, "Bcc")
+			meta.ReplyTo = addressToSlice(env, "Reply-To")
 
-			obj := DBMailSummary{
-				From:    from,
-				To:      addressToSlice(env, "To"),
-				Cc:      addressToSlice(env, "Cc"),
-				Bcc:     addressToSlice(env, "Bcc"),
-				ReplyTo: addressToSlice(env, "Reply-To"),
-			}
-
-			MetadataJSON, err := json.Marshal(obj)
+			MetadataJSON, err := json.Marshal(meta)
 			if err != nil {
 				logger.Log().Errorf("[message] %s", err.Error())
 				continue
@@ -115,7 +114,7 @@ func ReindexAll() {
 		}
 
 		// roll back if it fails
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		// insert mail summary data
 		for _, u := range updates {

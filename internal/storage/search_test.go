@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/axllent/mailpit/config"
-	"github.com/jhillyerd/enmime"
+	"github.com/jhillyerd/enmime/v2"
 )
 
 func TestSearch(t *testing.T) {
@@ -48,7 +48,7 @@ func TestSearch(t *testing.T) {
 
 			bufBytes := buf.Bytes()
 
-			if _, err := Store(&bufBytes); err != nil {
+			if _, err := Store(&bufBytes, nil); err != nil {
 				t.Log("error ", err)
 				t.Fail()
 			}
@@ -117,11 +117,11 @@ func TestSearchDelete100(t *testing.T) {
 		}
 
 		for i := 0; i < 100; i++ {
-			if _, err := Store(&testTextEmail); err != nil {
+			if _, err := Store(&testTextEmail, nil); err != nil {
 				t.Log("error ", err)
 				t.Fail()
 			}
-			if _, err := Store(&testMimeEmail); err != nil {
+			if _, err := Store(&testMimeEmail, nil); err != nil {
 				t.Log("error ", err)
 				t.Fail()
 			}
@@ -158,7 +158,7 @@ func TestSearchDelete1100(t *testing.T) {
 
 	t.Log("Testing search delete of 1100 messages")
 	for i := 0; i < 1100; i++ {
-		if _, err := Store(&testTextEmail); err != nil {
+		if _, err := Store(&testTextEmail, nil); err != nil {
 			t.Log("error ", err)
 			t.Fail()
 		}
@@ -203,7 +203,7 @@ func TestEscPercentChar(t *testing.T) {
 }
 
 func TestSizeToBytes(t *testing.T) {
-	tests := map[string]int64{}
+	tests := map[string]uint64{}
 	tests["1m"] = 1048576
 	tests["1mb"] = 1048576
 	tests["1 M"] = 1048576

@@ -13,7 +13,7 @@ import (
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/storage"
 	"github.com/gorilla/mux"
-	"github.com/jhillyerd/enmime"
+	"github.com/jhillyerd/enmime/v2"
 	"github.com/kovidgoyal/imaging"
 )
 
@@ -21,21 +21,6 @@ var (
 	thumbWidth  = 180
 	thumbHeight = 120
 )
-
-// swagger:parameters ThumbnailParams
-type thumbnailParams struct {
-	// Message database ID or "latest"
-	//
-	// in: path
-	// required: true
-	ID string
-
-	// Attachment part ID
-	//
-	// in: path
-	// required: true
-	PartID string
-}
 
 // Thumbnail returns a thumbnail image for an attachment (images only)
 func Thumbnail(w http.ResponseWriter, r *http.Request) {

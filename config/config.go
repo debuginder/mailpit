@@ -11,14 +11,28 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/axllent/ghru/v2"
 	"github.com/axllent/mailpit/internal/auth"
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/smtpd/chaos"
+	"github.com/axllent/mailpit/internal/snakeoil"
 	"github.com/axllent/mailpit/internal/spamassassin"
 	"github.com/axllent/mailpit/internal/tools"
 )
 
 var (
+	// Version is the Mailpit version, updated with every release
+	Version = "dev"
+
+	// GHRUConfig is the configuration for the GitHub Release Updater
+	// used to check for updates and self-update
+	GHRUConfig = ghru.Config{
+		Repo:           "axllent/mailpit",
+		ArchiveName:    "mailpit-{{.OS}}-{{.Arch}}",
+		BinaryName:     "mailpit",
+		CurrentVersion: Version,
+	}
+
 	// SMTPListen to listen on <interface>:<port>
 	SMTPListen = "[::]:1025"
 
@@ -72,6 +86,12 @@ var (
 	// DisableHTTPCompression will explicitly disable HTTP compression in the web UI and API
 	DisableHTTPCompression bool
 
+	// SendAPIAuthFile for Send API authentication
+	SendAPIAuthFile string
+
+	// SendAPIAuthAcceptAny accepts any username/password for the send API endpoint, including none
+	SendAPIAuthAcceptAny bool
+
 	// SMTPTLSCert file
 	SMTPTLSCert string
 
@@ -123,6 +143,9 @@ var (
 	// including x-tags & plus-addresses
 	TagsDisable string
 
+	// TagsUsername enables auto-tagging messages with the authenticated username
+	TagsUsername bool
+
 	// SMTPRelayConfigFile to parse a yaml file and store config of the relay SMTP server
 	SMTPRelayConfigFile string
 
@@ -158,6 +181,9 @@ var (
 	// SMTPAllowedRecipientsRegexp is the compiled version of SMTPAllowedRecipients
 	SMTPAllowedRecipientsRegexp *regexp.Regexp
 
+	// SMTPIgnoreRejectedRecipients if true, will accept emails to rejected recipients with 2xx response but silently drop them
+	SMTPIgnoreRejectedRecipients bool
+
 	// POP3Listen address - if set then Mailpit will start the POP3 server and listen on this address
 	POP3Listen = "[::]:1110"
 
@@ -173,6 +199,9 @@ var (
 	// EnableSpamAssassin must be either <host>:<port> or "postmark"
 	EnableSpamAssassin string
 
+	// HideDeleteAllButton hides the delete all button in the web UI
+	HideDeleteAllButton bool
+
 	// WebhookURL for calling
 	WebhookURL string
 
@@ -182,20 +211,18 @@ var (
 	// AllowUntrustedTLS allows untrusted HTTPS connections link checking & screenshot generation
 	AllowUntrustedTLS bool
 
-	// Version is the default application version, updated on release
-	Version = "dev"
-
-	// Repo on Github for updater
-	Repo = "axllent/mailpit"
-
-	// RepoBinaryName on Github for updater
-	RepoBinaryName = "mailpit"
+	// PrometheusListen address for Prometheus metrics server
+	// Empty = disabled, true= use existing web server, address = separate server
+	PrometheusListen string
 
 	// ChaosTriggers are parsed and set in the chaos module
 	ChaosTriggers string
 
 	// DisableHTMLCheck DEPRECATED 2024/04/13 - kept here to display console warning only
 	DisableHTMLCheck = false
+
+	// DisableVersionCheck disables version checking
+	DisableVersionCheck bool
 
 	// DemoMode disables SMTP relay, link checking & HTTP send functionality
 	DemoMode = false
@@ -224,6 +251,7 @@ type SMTPRelayConfigStruct struct {
 	AllowedRecipientsRegexp *regexp.Regexp // compiled regexp using AllowedRecipients
 	BlockedRecipients       string         `yaml:"blocked-recipients"` // regex, if set prevents relating to these addresses
 	BlockedRecipientsRegexp *regexp.Regexp // compiled regexp using BlockedRecipients
+	PreserveMessageIDs      bool           `yaml:"preserve-message-ids"` // preserve the original Message-ID when relaying
 
 	// DEPRECATED 2024/03/12
 	RecipientAllowlist string `yaml:"recipient-allowlist"`
@@ -286,6 +314,7 @@ func VerifyConfig() error {
 		return errors.New("[ui] HTTP bind should be in the format of <ip>:<port>")
 	}
 
+	// Web UI & API
 	if UIAuthFile != "" {
 		UIAuthFile = filepath.Clean(UIAuthFile)
 
@@ -308,8 +337,19 @@ func VerifyConfig() error {
 	}
 
 	if UITLSCert != "" {
-		UITLSCert = filepath.Clean(UITLSCert)
-		UITLSKey = filepath.Clean(UITLSKey)
+		if strings.HasPrefix(UITLSCert, "sans:") {
+			// generate a self-signed certificate
+			UITLSCert = snakeoil.Public(UITLSCert)
+		} else {
+			UITLSCert = filepath.Clean(UITLSCert)
+		}
+
+		if strings.HasPrefix(UITLSKey, "sans:") {
+			// generate a self-signed key
+			UITLSKey = snakeoil.Private(UITLSKey)
+		} else {
+			UITLSKey = filepath.Clean(UITLSKey)
+		}
 
 		if !isFile(UITLSCert) {
 			return fmt.Errorf("[ui] TLS certificate not found or readable: %s", UITLSCert)
@@ -320,13 +360,67 @@ func VerifyConfig() error {
 		}
 	}
 
+	// Send API
+	if SendAPIAuthFile != "" {
+		SendAPIAuthFile = filepath.Clean(SendAPIAuthFile)
+
+		if !isFile(SendAPIAuthFile) {
+			return fmt.Errorf("[send-api] password file not found or readable: %s", SendAPIAuthFile)
+		}
+
+		b, err := os.ReadFile(SendAPIAuthFile)
+		if err != nil {
+			return err
+		}
+
+		if err := auth.SetSendAPIAuth(string(b)); err != nil {
+			return err
+		}
+
+		logger.Log().Info("[send-api] enabling basic authentication")
+	}
+
+	if auth.SendAPICredentials != nil && SendAPIAuthAcceptAny {
+		return errors.New("[send-api] authentication cannot use both credentials and --send-api-auth-accept-any")
+	}
+
+	if SendAPIAuthAcceptAny && auth.UICredentials != nil {
+		logger.Log().Info("[send-api] disabling authentication")
+	}
+
+	// Prometheus configuration validation
+	if PrometheusListen != "" {
+		mode := strings.ToLower(strings.TrimSpace(PrometheusListen))
+		if mode != "true" && mode != "false" {
+			// Validate as address for separate server mode
+			_, err := net.ResolveTCPAddr("tcp", PrometheusListen)
+			if err != nil {
+				return fmt.Errorf("[prometheus] %s", err.Error())
+			}
+		} else if mode == "true" {
+			logger.Log().Info("[prometheus] enabling metrics")
+		}
+	}
+
+	// SMTP server
 	if SMTPTLSCert != "" && SMTPTLSKey == "" || SMTPTLSCert == "" && SMTPTLSKey != "" {
 		return errors.New("[smtp] you must provide both an SMTP TLS certificate and a key")
 	}
 
 	if SMTPTLSCert != "" {
-		SMTPTLSCert = filepath.Clean(SMTPTLSCert)
-		SMTPTLSKey = filepath.Clean(SMTPTLSKey)
+		if strings.HasPrefix(SMTPTLSCert, "sans:") {
+			// generate a self-signed certificate
+			SMTPTLSCert = snakeoil.Public(SMTPTLSCert)
+		} else {
+			SMTPTLSCert = filepath.Clean(SMTPTLSCert)
+		}
+
+		if strings.HasPrefix(SMTPTLSKey, "sans:") {
+			// generate a self-signed key
+			SMTPTLSKey = snakeoil.Private(SMTPTLSKey)
+		} else {
+			SMTPTLSKey = filepath.Clean(SMTPTLSKey)
+		}
 
 		if !isFile(SMTPTLSCert) {
 			return fmt.Errorf("[smtp] TLS certificate not found or readable: %s", SMTPTLSCert)
@@ -394,8 +488,18 @@ func VerifyConfig() error {
 
 	// POP3 server
 	if POP3TLSCert != "" {
-		POP3TLSCert = filepath.Clean(POP3TLSCert)
-		POP3TLSKey = filepath.Clean(POP3TLSKey)
+		if strings.HasPrefix(POP3TLSCert, "sans:") {
+			// generate a self-signed certificate
+			POP3TLSCert = snakeoil.Public(POP3TLSCert)
+		} else {
+			POP3TLSCert = filepath.Clean(POP3TLSCert)
+		}
+		if strings.HasPrefix(POP3TLSKey, "sans:") {
+			// generate a self-signed key
+			POP3TLSKey = snakeoil.Private(POP3TLSKey)
+		} else {
+			POP3TLSKey = filepath.Clean(POP3TLSKey)
+		}
 
 		if !isFile(POP3TLSCert) {
 			return fmt.Errorf("[pop3] TLS certificate not found or readable: %s", POP3TLSCert)
@@ -478,6 +582,14 @@ func VerifyConfig() error {
 
 		SMTPAllowedRecipientsRegexp = restrictRegexp
 		logger.Log().Infof("[smtp] only allowing recipients matching regexp: %s", SMTPAllowedRecipients)
+	}
+
+	if SMTPIgnoreRejectedRecipients {
+		if SMTPAllowedRecipientsRegexp == nil {
+			logger.Log().Warn("[smtp] ignoring rejected recipients has no effect without setting smtp-allowed-recipients")
+		} else {
+			logger.Log().Info("[smtp] ignoring rejected recipients")
+		}
 	}
 
 	if err := parseRelayConfig(SMTPRelayConfigFile); err != nil {

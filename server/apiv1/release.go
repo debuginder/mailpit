@@ -17,25 +17,6 @@ import (
 	"github.com/lithammer/shortuuid/v4"
 )
 
-// swagger:parameters ReleaseMessageParams
-type releaseMessageParams struct {
-	// Message database ID
-	//
-	// in: path
-	// description: Message database ID
-	// required: true
-	ID string
-
-	// in: body
-	Body struct {
-		// Array of email addresses to relay the message to
-		//
-		// required: true
-		// example: ["user1@example.com", "user2@example.com"]
-		To []string
-	}
-}
-
 // ReleaseMessage (method: POST) will release a message via a pre-configured external SMTP server.
 func ReleaseMessage(w http.ResponseWriter, r *http.Request) {
 	// swagger:route POST /api/v1/message/{ID}/release message ReleaseMessageParams
@@ -176,13 +157,14 @@ func ReleaseMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// generate unique ID
-	uid := shortuuid.New() + "@mailpit"
-	// update Message-ID with unique ID
-	msg, err = tools.SetMessageHeader(msg, "Message-ID", "<"+uid+">")
-	if err != nil {
-		httpError(w, err.Error())
-		return
+	if !config.SMTPRelayConfig.PreserveMessageIDs {
+		// replace the Message-ID header with unique ID
+		uid := shortuuid.New() + "@mailpit"
+		msg, err = tools.SetMessageHeader(msg, "Message-ID", "<"+uid+">")
+		if err != nil {
+			httpError(w, err.Error())
+			return
+		}
 	}
 
 	if err := smtpd.Relay(from, data.To, msg); err != nil {

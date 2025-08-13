@@ -29,16 +29,19 @@ type Message struct {
 	Subject string
 	// List-Unsubscribe header information
 	ListUnsubscribe ListUnsubscribe
-	// Message date if set, else date received
+	// Message RFC3339Nano date & time (if set), else date & time received
+	// ([extended RFC3339](https://tools.ietf.org/html/rfc3339#section-5.6) format with optional nano seconds)
 	Date time.Time
 	// Message tags
 	Tags []string
+	// Username used for authentication (if provided) with the SMTP or Send API
+	Username string
 	// Message body text
 	Text string
 	// Message body HTML
 	HTML string
 	// Message size in bytes
-	Size float64
+	Size uint64
 	// Inline message attachments
 	Inline []Attachment
 	// Message attachments
@@ -58,7 +61,7 @@ type Attachment struct {
 	// Content ID
 	ContentID string
 	// Size in bytes
-	Size float64
+	Size uint64
 }
 
 // MessageSummary struct for frontend messages
@@ -83,12 +86,14 @@ type MessageSummary struct {
 	ReplyTo []*mail.Address
 	// Email subject
 	Subject string
-	// Created time
+	// Received RFC3339Nano date & time ([extended RFC3339](https://tools.ietf.org/html/rfc3339#section-5.6) format with optional nano seconds)
 	Created time.Time
+	// Username used for authentication (if provided) with the SMTP or Send API
+	Username string
 	// Message tags
 	Tags []string
 	// Message size in bytes (total)
-	Size float64
+	Size uint64
 	// Whether the message has any attachments
 	Attachments int
 	// Message snippet includes up to 250 characters
@@ -97,18 +102,19 @@ type MessageSummary struct {
 
 // MailboxStats struct for quick mailbox total/read lookups
 type MailboxStats struct {
-	Total  float64
-	Unread float64
+	Total  uint64
+	Unread uint64
 	Tags   []string
 }
 
-// DBMailSummary struct for storing mail summary
-type DBMailSummary struct {
-	From    *mail.Address
-	To      []*mail.Address
-	Cc      []*mail.Address
-	Bcc     []*mail.Address
-	ReplyTo []*mail.Address
+// Metadata struct for storing message metadata
+type Metadata struct {
+	From     *mail.Address   `json:"From,omitempty"`
+	To       []*mail.Address `json:"To,omitempty"`
+	Cc       []*mail.Address `json:"Cc,omitempty"`
+	Bcc      []*mail.Address `json:"Bcc,omitempty"`
+	ReplyTo  []*mail.Address `json:"ReplyTo,omitempty"`
+	Username string          `json:"Username,omitempty"`
 }
 
 // ListUnsubscribe contains a summary of List-Unsubscribe & List-Unsubscribe-Post headers

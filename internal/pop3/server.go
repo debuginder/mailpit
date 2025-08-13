@@ -80,7 +80,7 @@ func Run() {
 
 type message struct {
 	ID   string
-	Size float64
+	Size uint64
 }
 
 func handleClient(conn net.Conn) {
@@ -211,22 +211,33 @@ func handleClient(conn net.Conn) {
 func handleTransactionCommand(conn net.Conn, cmd string, args []string, messages []message, toDelete *[]string) {
 	switch cmd {
 	case "STAT":
-		totalSize := float64(0)
+		totalSize := uint64(0)
 		for _, m := range messages {
 			totalSize += m.Size
 		}
-		sendResponse(conn, fmt.Sprintf("+OK %d %d", len(messages), int64(totalSize)))
+		sendResponse(conn, fmt.Sprintf("+OK %d %d", len(messages), totalSize))
 	case "LIST":
-		totalSize := float64(0)
+		totalSize := uint64(0)
 		for _, m := range messages {
 			totalSize += m.Size
 		}
-		sendResponse(conn, fmt.Sprintf("+OK %d messages (%d octets)", len(messages), int64(totalSize)))
 
-		for row, m := range messages {
-			sendResponse(conn, fmt.Sprintf("%d %d", row+1, int64(m.Size))) // Convert Size to int64 when printing
+		if len(args) > 0 {
+			arg, _ := getSafeArg(args, 0)
+			nr, err := strconv.Atoi(arg)
+			if err != nil || nr < 1 || nr > len(messages) {
+				sendResponse(conn, "-ERR no such message")
+				return
+			}
+			sendResponse(conn, fmt.Sprintf("+OK %d %d", nr, messages[nr-1].Size))
+		} else {
+			sendResponse(conn, fmt.Sprintf("+OK %d messages (%d octets)", len(messages), totalSize))
+
+			for row, m := range messages {
+				sendResponse(conn, fmt.Sprintf("%d %d", row+1, m.Size))
+			}
+			sendResponse(conn, ".")
 		}
-		sendResponse(conn, ".")
 	case "UIDL":
 		sendResponse(conn, "+OK unique-id listing follows")
 		for row, m := range messages {
@@ -260,7 +271,7 @@ func handleTransactionCommand(conn net.Conn, cmd string, args []string, messages
 		// begins with the termination octet, the line is "byte-stuffed" by
 		// pre-pending the termination octet to that line of the response.
 		// @see: https://www.ietf.org/rfc/rfc1939.txt
-		sendData(conn, strings.Replace(string(raw), "\n.", "\n..", -1))
+		sendData(conn, strings.ReplaceAll(string(raw), "\n.", "\n.."))
 		sendResponse(conn, ".")
 	case "TOP":
 		arg, err := getSafeArg(args, 0)
